@@ -19,7 +19,7 @@ using SpaceEngineers.Game.ModAPI.Ingame;
  * Prevents collisions of multiple `class Program` declarations.
  * Will be used to detect the ingame script region, whose name is the same.
  */
-namespace HelloWorld {
+namespace MinerControls {
 
 /*
  * Do not change this declaration because this is the game requirement.
@@ -30,7 +30,7 @@ public sealed class Program : MyGridProgram {
      * Must be same as the namespace. Will be used for automatic script export.
      * The code inside this region is the ingame script.
      */
-    #region HelloWorld
+    #region MinerControls
 
     /*
      * The constructor, called only once every session and always before any 
@@ -59,10 +59,7 @@ public sealed class Program : MyGridProgram {
      * The method itself is required, but the arguments above can be removed 
      * if not needed.
      */
-    public void Main(string argument, UpdateType updateSource) {
-        Echo("Hello World");
+    public void Main(string argument, UpdateType updateSource) {}
 
-    }
-
-    #endregion // HelloWorld
+    #endregion // MinerControls
 }}
