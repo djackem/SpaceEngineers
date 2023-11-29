@@ -20,6 +20,9 @@ using IMyTerminalBlock = Sandbox.ModAPI.IMyTerminalBlock;
 using System.Linq;
 using IMyTextPanel = Sandbox.ModAPI.IMyTextPanel;
 using System.ComponentModel;
+using IMyTextSurface = Sandbox.ModAPI.IMyTextSurface;
+using System.Text;
+using System.Text.Encodings.Web;
 
 /*
  * Must be unique per each script project.
@@ -36,10 +39,14 @@ public sealed class Program : MyGridProgram {
 
     /////////////////////////////////////////////////// GLOBALS //////////////////////////////////////
     string NAME = "[X]";   
+    char SEPARATOR = '-';
     
     Dictionary<string, List<IMyCargoContainer>> CARGO = new Dictionary<string, List<IMyCargoContainer>>();
     Dictionary<string, List<IMyTextPanel>>      PANEL = new Dictionary<string, List<IMyTextPanel>>();
     Dictionary<string, List<MyInventoryItem>>   ITEMS = new Dictionary<string, List<MyInventoryItem>>();
+    
+    //Dictionary<string, Vector2>           PANEL_INFO = new Dictionary<IMyTextPanel, Vector2>();
+    
     
     string ECHO = "";    
     
@@ -62,6 +69,8 @@ public sealed class Program : MyGridProgram {
                 if ( !CARGO.ContainsKey(data) ) CARGO.Add( data, new List<IMyCargoContainer>() );
                 CARGO[data].Add( (IMyCargoContainer)block );
             }else if ( block is IMyTextPanel ){
+                var surface = (IMyTextSurface) block;
+                //PANEL_INFO.Add( (IMyTextPanel)block, ((IMyTextSurface)block).SurfaceSize );
                 if ( !PANEL.ContainsKey(data) ) PANEL.Add( data, new List<IMyTextPanel>() );
                 PANEL[data].Add( (IMyTextPanel)block );
             }
@@ -110,9 +119,9 @@ public sealed class Program : MyGridProgram {
         List<string> lines = new List<string>();
         if ( category == "items" ){
             foreach( KeyValuePair<string, List<MyInventoryItem>> entry in ITEMS ){
-                lines.Add($"{entry.Key}:");
+                //lines.Add($"{entry.Key}:");
                 foreach( MyInventoryItem item in entry.Value ){
-                    lines.Add($"{item.Type.SubtypeId} = {item.Amount}");
+                    lines.Add($"{item.Type.SubtypeId}${SEPARATOR}{item.Amount}");
                 }
             }
         }else{
@@ -121,10 +130,26 @@ public sealed class Program : MyGridProgram {
 
         // Write to panel
         panel.WriteText("");
-        foreach( string line in lines ){
-            panel.WriteText( $"{line}\n", true );
-        }
+        foreach( string line in lines ) WriteSpacedString( line, SEPARATOR, panel );
     }
+
+    public void WriteSpacedString( string str, char separator, IMyTextPanel panel ){
+        float panel_width = ((IMyTextSurface)panel).SurfaceSize.X;
+        string[] split = str.Split(separator);
+
+        Func<string, IMyTextPanel, int> width = 
+            ( s, p )=> (int)Math.Ceiling( p.MeasureStringInPixels(new StringBuilder(s, s.Length), p.Font, p.FontSize).X ) ;
+        
+        int size_sep = width( separator.ToString(), panel );
+        int size_name = width( split[0], panel );
+        int size_amount = width( split[1], panel );
+        
+        int seps_to_add = (int)Math.Floor( (panel_width-(size_name + size_amount)) / size_sep) - 1;
+        string seps = new StringBuilder().Insert(0, separator.ToString(), seps_to_add-1).ToString();
+        
+        panel.WriteText( $"{split[0]}{seps}{split[1]}\n", true );
+    }
+
 
     //------------------------- Tick -------------------------
     public void Main(string argument, UpdateType updateSource) {
@@ -144,8 +169,7 @@ public sealed class Program : MyGridProgram {
             foreach( IMyTextPanel panel in entry.Value ){
                 UpdatePanel( panel, entry.Key );
             }
-        }       
-        
+        }
 
         Echo( ECHO );        
     }
