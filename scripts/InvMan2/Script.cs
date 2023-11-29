@@ -23,31 +23,24 @@ using System.ComponentModel;
 using IMyTextSurface = Sandbox.ModAPI.IMyTextSurface;
 using System.Text;
 using System.Text.Encodings.Web;
+using IMyRefinery = Sandbox.ModAPI.IMyRefinery;
 
-/*
- * Must be unique per each script project.
- * Prevents collisions of multiple `class Program` declarations.
- * Will be used to detect the ingame script region, whose name is the same.
- */
 namespace InvMan2 {
-
-/*
- * Do not change this declaration because this is the game requirement.
- */
 public sealed class Program : MyGridProgram {
-    #region InvMan2   
+    #region InvMan2
 
     /////////////////////////////////////////////////// GLOBALS //////////////////////////////////////
     string NAME = "[X]";   
     char SEPARATOR = '-';
     
+    
     Dictionary<string, List<IMyCargoContainer>> CARGO = new Dictionary<string, List<IMyCargoContainer>>();
     Dictionary<string, List<IMyTextPanel>>      PANEL = new Dictionary<string, List<IMyTextPanel>>();
     Dictionary<string, List<MyInventoryItem>>   ITEMS = new Dictionary<string, List<MyInventoryItem>>();
+    Dictionary<string, List<IMyRefinery>>       REFIN = new Dictionary<string, List<IMyRefinery>>();
     
     //Dictionary<string, Vector2>           PANEL_INFO = new Dictionary<IMyTextPanel, Vector2>();
-    
-    
+        
     string ECHO = "";    
     
     public void Save() { }
@@ -68,18 +61,24 @@ public sealed class Program : MyGridProgram {
             if ( block is IMyCargoContainer ){
                 if ( !CARGO.ContainsKey(data) ) CARGO.Add( data, new List<IMyCargoContainer>() );
                 CARGO[data].Add( (IMyCargoContainer)block );
+
             }else if ( block is IMyTextPanel ){
                 var surface = (IMyTextSurface) block;
                 //PANEL_INFO.Add( (IMyTextPanel)block, ((IMyTextSurface)block).SurfaceSize );
                 if ( !PANEL.ContainsKey(data) ) PANEL.Add( data, new List<IMyTextPanel>() );
                 PANEL[data].Add( (IMyTextPanel)block );
+            
+            }else if ( block is IMyRefinery ){
+                if ( !REFIN.ContainsKey(data) ) REFIN.Add( data, new List<IMyRefinery>() );
+                REFIN[data].Add( (IMyRefinery)block );
             }
         }
     }
 
     //------------------------- Helpers -------------------------
-    Func<string, string> FormatCustomData = s => s.ToLower().Trim();
-    Func<string, string> FormatId = s => s.Substring( s.LastIndexOf("_") + 1 ).Trim();
+    Func<string, string>        FormatCustomData = s => s.ToLower().Trim();
+    Func<string, string>        FormatId = s => s.Substring( s.LastIndexOf("_") + 1 ).Trim();
+    Func<string, string>        UpperCase = s => char.ToUpper(s[0]) + s.Substring(1);
 
     public void RegisterItem( MyInventoryItem item ){
         string id = FormatId( item.Type.TypeId );
@@ -115,39 +114,78 @@ public sealed class Program : MyGridProgram {
         return updated_inventory;
     }
 
-    public void UpdatePanel( IMyTextPanel panel, string category ){
-        List<string> lines = new List<string>();
-        if ( category == "items" ){
-            foreach( KeyValuePair<string, List<MyInventoryItem>> entry in ITEMS ){
-                //lines.Add($"{entry.Key}:");
-                foreach( MyInventoryItem item in entry.Value ){
-                    lines.Add($"{item.Type.SubtypeId}${SEPARATOR}{item.Amount}");
-                }
-            }
-        }else{
-            // Lookup category
-        }
-
-        // Write to panel
-        panel.WriteText("");
-        foreach( string line in lines ) WriteSpacedString( line, SEPARATOR, panel );
+    public void UpdateRefinery( IMyRefinery refinery, string category ){
+        ECHO += refinery.CustomName;
     }
 
-    public void WriteSpacedString( string str, char separator, IMyTextPanel panel ){
-        float panel_width = ((IMyTextSurface)panel).SurfaceSize.X;
-        string[] split = str.Split(separator);
+    public void UpdatePanel( IMyTextPanel panel, string category ){
+        List<List<string>> lines = new List<List<string>>();
 
-        Func<string, IMyTextPanel, int> width = 
-            ( s, p )=> (int)Math.Ceiling( p.MeasureStringInPixels(new StringBuilder(s, s.Length), p.Font, p.FontSize).X ) ;
-        
-        int size_sep = width( separator.ToString(), panel );
-        int size_name = width( split[0], panel );
-        int size_amount = width( split[1], panel );
-        
-        int seps_to_add = (int)Math.Floor( (panel_width-(size_name + size_amount)) / size_sep) - 1;
-        string seps = new StringBuilder().Insert(0, separator.ToString(), seps_to_add-1).ToString();
-        
-        panel.WriteText( $"{split[0]}{seps}{split[1]}\n", true );
+        Func<MyFixedPoint, string>  FormatAmount = n => n > 1000 ? $"{(int)n/1000}k" : n.ToString(); 
+    
+        if ( category == "items" ){
+            foreach( KeyValuePair<string, List<MyInventoryItem>> entry in ITEMS ){
+                lines.Add( new List<string>(){ $"{entry.Key}:" } ); // Titles
+                foreach( MyInventoryItem item in entry.Value ){
+                    lines.Add( new List<string>() { item.Type.SubtypeId, "._-=-_.", FormatAmount(item.Amount) });
+                }
+            }
+        }else if ( ITEMS.ContainsKey( UpperCase(category) ) ){
+            // Lookup category
+            foreach( MyInventoryItem item in ITEMS[UpperCase(category)] ){
+                lines.Add( new List<string>() { item.Type.SubtypeId, "._-=-_.", FormatAmount(item.Amount) });
+            }
+        }
+        // Write to panel
+        panel.WriteText("");
+        foreach( List<string> line in lines ){            
+            if ( line.Count() == 1 ){
+                panel.WriteText( $"{line[0]}\n", true );
+            }else if( line.Count()==3 ){
+                WriteSpacedString( line, panel );
+            }
+        }
+    }
+
+    public void WriteSpacedString( List<string> str, IMyTextPanel panel ){
+        string final_string = string.Join( "", str );
+
+        // Size of the panel / text
+        float panel_width = panel.SurfaceSize.X;
+        Func<string, IMyTextPanel, Vector2> StringSize =
+            ( strn, panl )=> panl.MeasureStringInPixels(new StringBuilder(strn), panl.Font, panl.FontSize );
+
+        if ( str.Count >= 2 ){
+            float head_width = StringSize( str[0], panel ).X;
+            float tail_width = StringSize( str[str.Count-1], panel ).X;
+            float separator_space = panel_width - ((panel.TextPadding / 100) * panel_width) - (head_width + tail_width);
+            ECHO += panel.TextPadding + "\n";
+            float separator_space_total = (float)separator_space;
+            
+            if ( separator_space <= 0 ){ // No room for even 1 sep, write "headtail" cross your fingers
+                final_string = $"{str[0]}{str[str.Count-1]}";            
+            }else{
+                string sep_final = "";
+                float percentage_covered = 0;
+                char[] sep_list = str[1].ToCharArray();
+                
+                while ( separator_space > 0 ){
+                    int index = (int)Math.Round( (double)(sep_list.Length-1) * percentage_covered );
+                    string character = sep_list[index].ToString();
+                    float character_width = StringSize( character, panel ).X;                    
+                    separator_space -= character_width;
+                    percentage_covered = (separator_space_total - separator_space) / separator_space_total;
+                    if (percentage_covered > .95) {
+                        sep_final = sep_final.Remove(0, 1);// Knock first off if over
+                        break;
+                    }else{
+                        sep_final += character;
+                    }                   
+                }
+                final_string = $"{str[0]}{sep_final}{str[str.Count-1]}";
+            }            
+        }        
+        panel.WriteText( $"{final_string}\n", true );
     }
 
 
@@ -170,6 +208,13 @@ public sealed class Program : MyGridProgram {
                 UpdatePanel( panel, entry.Key );
             }
         }
+
+       /*  foreach( KeyValuePair<string, List<IMyRefinery>> entry in REFIN ){
+            ECHO += $"\n{entry.Key}\n{string.Join(Environment.NewLine, entry.Value)}";
+            foreach( IMyRefinery refinery in entry.Value ){
+                UpdateRefinery( refinery, entry.Key );
+            }
+        } */
 
         Echo( ECHO );        
     }
