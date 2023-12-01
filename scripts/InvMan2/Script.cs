@@ -31,6 +31,7 @@ using Vector2 = VRageMath.Vector2;
 using System.Drawing;
 using Color = System.Drawing.Color;
 using RectangleF = VRageMath.RectangleF;
+using System.Security.Cryptography.X509Certificates;
 
 namespace InvMan2 {
 public sealed class Program : MyGridProgram {
@@ -42,6 +43,7 @@ public sealed class Program : MyGridProgram {
         
     Dictionary<string, List<IMyCargoContainer>> CARGO = new Dictionary<string, List<IMyCargoContainer>>();
     Dictionary<string, List<IMyTextSurface>>    PANEL = new Dictionary<string, List<IMyTextSurface>>();
+    Dictionary<long, List<MySprite>>            PANEL_OVERFLOW = new Dictionary<long, List<MySprite>>();
     Dictionary<string, List<MyInventoryItem>>   ITEMS = new Dictionary<string, List<MyInventoryItem>>();
     List<IMyBatteryBlock>                       BATTS = new List<IMyBatteryBlock>();
     Dictionary<string, List<IMyRefinery>>       REFIN = new Dictionary<string, List<IMyRefinery>>();
@@ -73,6 +75,7 @@ public sealed class Program : MyGridProgram {
                 var surface = (IMyTextSurface)block;
                 surface.ContentType = ContentType.SCRIPT;
                 surface.Script = "";
+                PANEL_OVERFLOW[ block.EntityId ] = new List<MySprite>(){}; // Make new entry in sprites list
                 if ( !PANEL.ContainsKey(data) ) PANEL.Add( data, new List<IMyTextSurface>() );
                 PANEL[data].Add( surface );
                 
@@ -90,7 +93,7 @@ public sealed class Program : MyGridProgram {
     Func<string, string>        FormatCustomData = s => s.ToLower().Trim();
     Func<string, string>        FormatId = s => s.Substring( s.LastIndexOf("_") + 1 ).Trim();
     Func<string, string>        UpperCase = s => char.ToUpper(s[0]) + s.Substring(1);
-
+    
     public void RegisterItem( MyInventoryItem item ){
         string id = FormatId( item.Type.TypeId );
         if ( !ITEMS.ContainsKey(id) ) ITEMS.Add( id, new List<MyInventoryItem>() );
@@ -150,17 +153,41 @@ public sealed class Program : MyGridProgram {
         last_sprite_size = StringSize(write, panel);
         return sprite;
     }
+    public MySprite MoveSprite( MySprite sprite, Vector2 position ){
+        //Vector2 new_pos = (sprite.Position ?? new Vector2(0,0)) + position;
+        var sprite_return = new MySprite() {
+            Type = SpriteType.TEXT,
+            Data = "sprite.Data",
+            Position = position,
+            RotationOrScale = 1f,
+            Color = sprite.Color,
+            Alignment = TextAlignment.CENTER,
+            FontId = sprite.FontId
+        };
+        return sprite_return;
+    }
 
     public void UpdatePanel( IMyTextSurface panel, string category ){
         var viewport = new RectangleF( (panel.TextureSize - panel.SurfaceSize)/2, panel.SurfaceSize );
         Vector2 position = new Vector2( viewport.Width/2, 10 ); // Starting pos
         List<MySprite> sprites = new List<MySprite>();
         Vector2 last_sprite_size = new Vector2(0,0);
-        string write;
+        string write = "";
+        long id = ((IMyEntity)panel).EntityId;
+        //bool was_overflowing = false;
         
         Func<MyFixedPoint, string>  FormatAmount = n => n > 1000 ? $"{(int)n/1000}k" : n.ToString();        
         
-        if ( category == "items" ){
+        // If we have items in queue, use those
+        if ( PANEL_OVERFLOW[id].Count > 0 ){
+            PANEL_OVERFLOW[id].RemoveAt(0);
+            
+            foreach( MySprite old_sprite in PANEL_OVERFLOW[id] ) {                
+                sprites.Add( CreateSprite( old_sprite.Data, panel, position, ref last_sprite_size ));
+                position.Y += last_sprite_size.Y + 5;
+            }            
+
+        }else if ( category == "items" ){
             foreach( KeyValuePair<string, List<MyInventoryItem>> entry in ITEMS ){
                 sprites.Add( CreateSprite( 
                     CreateSpacedString(new List<string>(){ $"{entry.Key}:", " ", ""}, panel), panel, position, ref last_sprite_size )); // Titles
@@ -174,6 +201,7 @@ public sealed class Program : MyGridProgram {
                     position.Y += last_sprite_size.Y + 5;
                 }
             }
+
         }else if ( ITEMS.ContainsKey( UpperCase(category) ) ){
             sprites.Add( CreateSprite( $"{UpperCase(category)}:", panel, position, ref last_sprite_size )); // Titles
             position.Y += last_sprite_size.Y + 5; 
@@ -201,45 +229,38 @@ public sealed class Program : MyGridProgram {
                 
                 // Stored %
                 var batt_current = Math.Round(battery.CurrentStoredPower,1);
-                var batt_max = Math.Round(battery.MaxStoredPower,1);                
-                var batt_percent = Math.Max( (batt_current / batt_max) * batt_max, 1 );
+                var batt_max = Math.Round(battery.MaxStoredPower,1);             
+                var batt_percent = Math.Round(batt_current / batt_max, 2);
                 write = CreateSpacedString( new List<string>() { 
-                        $"Input {Math.Floor(input_percent*100)}% [", CreatePercentBar( batt_percent ), $"] {batt_current}/{batt_max}" }, panel);
+                        $"Battery {batt_percent*100}% [", CreatePercentBar( batt_percent ), $"] {batt_current}/{batt_max}" }, panel);
                 sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ) );
                 position.Y += last_sprite_size.Y + 5;
+                ECHO += $"{batt_current} : {batt_max} : {batt_percent}\n";                              
             }
-
         
         }
 
         // Write to panel
-        //panel.WriteText("");
-        /* var viewport = new RectangleF( (panel.TextureSize - panel.SurfaceSize)/2, panel.SurfaceSize );
-        Vector2 position = new Vector2( viewport.Width/2, 10 ); // Starting pos
-        string write_this = "";*/
         var frame = panel.DrawFrame();
-        foreach ( MySprite sprite in sprites ){
-            frame.Add( sprite );
-        }
-        frame.Dispose();
-        
-        /* foreach( List<string> line in sprites ){     
-            var sprite_size = new Vector2(0,0);
-            if ( line.Count() == 1 ){
-                write_this = line[0];
-                sprite_size = StringSize(write_this, panel);
-            }else if( line.Count()==3 ){
-                write_this = CreateSpacedString( line, panel );                
+        Vector2 sprites_height = new Vector2( 0, 0 );
+        for ( int i=0; i<sprites.Count; i++ ){
+            var sprite = sprites[i];
+            
+            // If height is too much, add to queue for next tick
+            if( sprite.Size != null ) sprites_height += (Vector2)sprite.Size;            
+            if ( sprite.Position?.Y > viewport.Y + viewport.Height ){
+                PANEL_OVERFLOW[id] = sprites;
+                break;
             }
-            var sprite = MySprite.CreateText( write_this, panel.Font, panel.FontColor );
-            sprite.Position = position;
+
             frame.Add( sprite );
-            position.Y += StringSize(write_this, panel).Y + 5;// Vertical space between sprites
         }
-        
         frame.Dispose();
-        ECHO += $"{panel.DisplayName} : {category} : {position}\n";
-        try { throw new InvalidOperationException("break my point"); } catch(Exception) {} */
+
+        // Reset when not overflowing if we were
+        /* if ( !was_overflowing & PANEL_OVERFLOW[id].Count > 0 ){
+            PANEL_OVERFLOW[id] = new List<MySprite>();
+        } */
     }
 
     Func<string, IMyTextSurface, Vector2> StringSize =
