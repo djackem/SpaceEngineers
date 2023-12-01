@@ -24,6 +24,13 @@ using IMyTextSurface = Sandbox.ModAPI.IMyTextSurface;
 using System.Text;
 using System.Text.Encodings.Web;
 using IMyRefinery = Sandbox.ModAPI.IMyRefinery;
+using IMyBatteryBlock = Sandbox.ModAPI.IMyBatteryBlock;
+using IMyTextSurfaceProvider = Sandbox.ModAPI.IMyTextSurfaceProvider;
+using System.Numerics;
+using Vector2 = VRageMath.Vector2;
+using System.Drawing;
+using Color = System.Drawing.Color;
+using RectangleF = VRageMath.RectangleF;
 
 namespace InvMan2 {
 public sealed class Program : MyGridProgram {
@@ -31,12 +38,12 @@ public sealed class Program : MyGridProgram {
 
     /////////////////////////////////////////////////// GLOBALS //////////////////////////////////////
     string NAME = "[X]";   
-    char SEPARATOR = '-';
-    
-    
+    string SEPARATOR = "——-——";
+        
     Dictionary<string, List<IMyCargoContainer>> CARGO = new Dictionary<string, List<IMyCargoContainer>>();
-    Dictionary<string, List<IMyTextPanel>>      PANEL = new Dictionary<string, List<IMyTextPanel>>();
+    Dictionary<string, List<IMyTextSurface>>    PANEL = new Dictionary<string, List<IMyTextSurface>>();
     Dictionary<string, List<MyInventoryItem>>   ITEMS = new Dictionary<string, List<MyInventoryItem>>();
+    List<IMyBatteryBlock>                       BATTS = new List<IMyBatteryBlock>();
     Dictionary<string, List<IMyRefinery>>       REFIN = new Dictionary<string, List<IMyRefinery>>();
     
     //Dictionary<string, Vector2>           PANEL_INFO = new Dictionary<IMyTextPanel, Vector2>();
@@ -63,10 +70,14 @@ public sealed class Program : MyGridProgram {
                 CARGO[data].Add( (IMyCargoContainer)block );
 
             }else if ( block is IMyTextPanel ){
-                var surface = (IMyTextSurface) block;
-                //PANEL_INFO.Add( (IMyTextPanel)block, ((IMyTextSurface)block).SurfaceSize );
-                if ( !PANEL.ContainsKey(data) ) PANEL.Add( data, new List<IMyTextPanel>() );
-                PANEL[data].Add( (IMyTextPanel)block );
+                var surface = (IMyTextSurface)block;
+                surface.ContentType = ContentType.SCRIPT;
+                surface.Script = "";
+                if ( !PANEL.ContainsKey(data) ) PANEL.Add( data, new List<IMyTextSurface>() );
+                PANEL[data].Add( surface );
+                
+            }else if ( block is IMyBatteryBlock ){
+                BATTS.Add( (IMyBatteryBlock)block );
             
             }else if ( block is IMyRefinery ){
                 if ( !REFIN.ContainsKey(data) ) REFIN.Add( data, new List<IMyRefinery>() );
@@ -115,68 +126,151 @@ public sealed class Program : MyGridProgram {
     }
 
     public void UpdateRefinery( IMyRefinery refinery, string category ){
-        ECHO += refinery.CustomName;
+       // ECHO += refinery.CustomName;
     }
 
-    public void UpdatePanel( IMyTextPanel panel, string category ){
-        List<List<string>> lines = new List<List<string>>();
+    public string CreatePercentBar( double percent ){
+        string r = "";        
+        for ( decimal i=0; i<1; i+=(decimal)0.25 ){// Change for more chars
+            r += i < (decimal)percent ? "|" : ".";
+        }
+        return r;
+    }
 
-        Func<MyFixedPoint, string>  FormatAmount = n => n > 1000 ? $"{(int)n/1000}k" : n.ToString(); 
-    
+    public MySprite CreateSprite( string write, IMyTextSurface panel, Vector2 position, ref Vector2 last_sprite_size ){
+        var sprite = new MySprite() {
+            Type = SpriteType.TEXT,
+            Data = write,
+            Position = position,
+            RotationOrScale = 1f,
+            Color = panel.FontColor,
+            Alignment = TextAlignment.CENTER,
+            FontId = panel.Font
+        };
+        last_sprite_size = StringSize(write, panel);
+        return sprite;
+    }
+
+    public void UpdatePanel( IMyTextSurface panel, string category ){
+        var viewport = new RectangleF( (panel.TextureSize - panel.SurfaceSize)/2, panel.SurfaceSize );
+        Vector2 position = new Vector2( viewport.Width/2, 10 ); // Starting pos
+        List<MySprite> sprites = new List<MySprite>();
+        Vector2 last_sprite_size = new Vector2(0,0);
+        string write;
+        
+        Func<MyFixedPoint, string>  FormatAmount = n => n > 1000 ? $"{(int)n/1000}k" : n.ToString();        
+        
         if ( category == "items" ){
             foreach( KeyValuePair<string, List<MyInventoryItem>> entry in ITEMS ){
-                lines.Add( new List<string>(){ $"{entry.Key}:" } ); // Titles
-                foreach( MyInventoryItem item in entry.Value ){
-                    lines.Add( new List<string>() { item.Type.SubtypeId, "._-=-_.", FormatAmount(item.Amount) });
+                sprites.Add( CreateSprite( 
+                    CreateSpacedString(new List<string>(){ $"{entry.Key}:", " ", ""}, panel), panel, position, ref last_sprite_size )); // Titles
+                position.Y += last_sprite_size.Y + 5;
+                
+                foreach( MyInventoryItem item in entry.Value ){ // Name --- Amount
+                    write = CreateSpacedString( new List<string>() { 
+                        $"{item.Type.SubtypeId} ", SEPARATOR, $" {FormatAmount(item.Amount)}" }, panel);
+                    
+                    sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ));
+                    position.Y += last_sprite_size.Y + 5;
                 }
             }
         }else if ( ITEMS.ContainsKey( UpperCase(category) ) ){
-            // Lookup category
+            sprites.Add( CreateSprite( $"{UpperCase(category)}:", panel, position, ref last_sprite_size )); // Titles
+            position.Y += last_sprite_size.Y + 5; 
+            // Lookup Item category
             foreach( MyInventoryItem item in ITEMS[UpperCase(category)] ){
-                lines.Add( new List<string>() { item.Type.SubtypeId, "._-=-_.", FormatAmount(item.Amount) });
+                write = CreateSpacedString( new List<string>() { 
+                        $"{item.Type.SubtypeId} ", SEPARATOR, $" {FormatAmount(item.Amount)}" }, panel);
+                sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ));
+                position.Y += last_sprite_size.Y + 5;
             }
+
+        }else if (category == "battery"){
+            foreach( IMyBatteryBlock battery in BATTS ){
+                sprites.Add( CreateSprite( $"{battery.CustomName} ( {battery.ChargeMode} ):", panel, position, ref last_sprite_size ) );
+                position.Y += last_sprite_size.Y + 5;
+                
+                // Input %
+                var input_current = Math.Round(battery.CurrentInput,2);
+                var input_max = Math.Round(battery.MaxInput,2);                
+                var input_percent = (input_current / input_max) * input_max;
+                write = CreateSpacedString( new List<string>() { 
+                        $"Input {Math.Floor(input_percent*100)}% [", CreatePercentBar( input_percent ), $"] {input_current}/{input_max}" }, panel);
+                sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ) );
+                position.Y += last_sprite_size.Y + 5;
+                
+                // Stored %
+                var batt_current = Math.Round(battery.CurrentStoredPower,1);
+                var batt_max = Math.Round(battery.MaxStoredPower,1);                
+                var batt_percent = Math.Max( (batt_current / batt_max) * batt_max, 1 );
+                write = CreateSpacedString( new List<string>() { 
+                        $"Input {Math.Floor(input_percent*100)}% [", CreatePercentBar( batt_percent ), $"] {batt_current}/{batt_max}" }, panel);
+                sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ) );
+                position.Y += last_sprite_size.Y + 5;
+            }
+
+        
         }
+
         // Write to panel
-        panel.WriteText("");
-        foreach( List<string> line in lines ){            
-            if ( line.Count() == 1 ){
-                panel.WriteText( $"{line[0]}\n", true );
-            }else if( line.Count()==3 ){
-                WriteSpacedString( line, panel );
-            }
+        //panel.WriteText("");
+        /* var viewport = new RectangleF( (panel.TextureSize - panel.SurfaceSize)/2, panel.SurfaceSize );
+        Vector2 position = new Vector2( viewport.Width/2, 10 ); // Starting pos
+        string write_this = "";*/
+        var frame = panel.DrawFrame();
+        foreach ( MySprite sprite in sprites ){
+            frame.Add( sprite );
         }
+        frame.Dispose();
+        
+        /* foreach( List<string> line in sprites ){     
+            var sprite_size = new Vector2(0,0);
+            if ( line.Count() == 1 ){
+                write_this = line[0];
+                sprite_size = StringSize(write_this, panel);
+            }else if( line.Count()==3 ){
+                write_this = CreateSpacedString( line, panel );                
+            }
+            var sprite = MySprite.CreateText( write_this, panel.Font, panel.FontColor );
+            sprite.Position = position;
+            frame.Add( sprite );
+            position.Y += StringSize(write_this, panel).Y + 5;// Vertical space between sprites
+        }
+        
+        frame.Dispose();
+        ECHO += $"{panel.DisplayName} : {category} : {position}\n";
+        try { throw new InvalidOperationException("break my point"); } catch(Exception) {} */
     }
 
-    public void WriteSpacedString( List<string> str, IMyTextPanel panel ){
-        string final_string = string.Join( "", str );
-
-        // Size of the panel / text
-        float panel_width = panel.SurfaceSize.X;
-        Func<string, IMyTextPanel, Vector2> StringSize =
+    Func<string, IMyTextSurface, Vector2> StringSize =
             ( strn, panl )=> panl.MeasureStringInPixels(new StringBuilder(strn), panl.Font, panl.FontSize );
 
+    public string CreateSpacedString( List<string> str, IMyTextSurface panel ){
+        var final_string = string.Join( "", str );
+        var viewport = new RectangleF( (panel.TextureSize - panel.SurfaceSize) / 2f, panel.SurfaceSize );        
+        
         if ( str.Count >= 2 ){
-            float head_width = StringSize( str[0], panel ).X;
-            float tail_width = StringSize( str[str.Count-1], panel ).X;
-            float separator_space = panel_width - ((panel.TextPadding / 100) * panel_width) - (head_width + tail_width);
-            ECHO += panel.TextPadding + "\n";
+            float head_width = (float)Math.Ceiling(StringSize( str[0], panel ).X);
+            float tail_width = (float)Math.Ceiling(StringSize( str[str.Count-1], panel ).X);            
+            float separator_space = (viewport.Width) - (float)Math.Floor(head_width+tail_width);            
             float separator_space_total = (float)separator_space;
             
             if ( separator_space <= 0 ){ // No room for even 1 sep, write "headtail" cross your fingers
                 final_string = $"{str[0]}{str[str.Count-1]}";            
-            }else{
+            
+            }else{ // Build (stretched) separator                
                 string sep_final = "";
                 float percentage_covered = 0;
                 char[] sep_list = str[1].ToCharArray();
-                
+
                 while ( separator_space > 0 ){
                     int index = (int)Math.Round( (double)(sep_list.Length-1) * percentage_covered );
                     string character = sep_list[index].ToString();
                     float character_width = StringSize( character, panel ).X;                    
                     separator_space -= character_width;
                     percentage_covered = (separator_space_total - separator_space) / separator_space_total;
-                    if (percentage_covered > .95) {
-                        sep_final = sep_final.Remove(0, 1);// Knock first off if over
+                    if ( percentage_covered > .95 ) {
+                        //sep_final = sep_final.Remove(0, 1);// Knock first off if over
                         break;
                     }else{
                         sep_final += character;
@@ -185,9 +279,9 @@ public sealed class Program : MyGridProgram {
                 final_string = $"{str[0]}{sep_final}{str[str.Count-1]}";
             }            
         }        
-        panel.WriteText( $"{final_string}\n", true );
+        //panel.WriteText( $"{final_string}\n", true );
+        return final_string;
     }
-
 
     //------------------------- Tick -------------------------
     public void Main(string argument, UpdateType updateSource) {
@@ -201,10 +295,14 @@ public sealed class Program : MyGridProgram {
                 }
             }
         }
+        
+        foreach( IMyBatteryBlock battery in BATTS ){            
+                     
+        }
                 
-        foreach( KeyValuePair<string, List<IMyTextPanel>> entry in PANEL ){
-            ECHO += $"\n{entry.Key}\n{string.Join(Environment.NewLine, entry.Value)}";
-            foreach( IMyTextPanel panel in entry.Value ){
+        foreach( KeyValuePair<string, List<IMyTextSurface>> entry in PANEL ){
+            //ECHO += $"\n{entry.Key}\n{string.Join(Environment.NewLine, entry.Value)}";
+            foreach( IMyTextSurface panel in entry.Value ){
                 UpdatePanel( panel, entry.Key );
             }
         }
