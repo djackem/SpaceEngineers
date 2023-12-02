@@ -29,9 +29,12 @@ using IMyTextSurfaceProvider = Sandbox.ModAPI.IMyTextSurfaceProvider;
 using System.Numerics;
 using Vector2 = VRageMath.Vector2;
 using System.Drawing;
-using Color = System.Drawing.Color;
 using RectangleF = VRageMath.RectangleF;
 using System.Security.Cryptography.X509Certificates;
+using Rectangle = System.Drawing.Rectangle;
+using Point = System.Drawing.Point;
+using Color = VRageMath.Color;
+
 
 namespace InvMan2 {
 public sealed class Program : MyGridProgram {
@@ -43,7 +46,9 @@ public sealed class Program : MyGridProgram {
         
     Dictionary<string, List<IMyCargoContainer>> CARGO = new Dictionary<string, List<IMyCargoContainer>>();
     Dictionary<string, List<IMyTextSurface>>    PANEL = new Dictionary<string, List<IMyTextSurface>>();
+    
     Dictionary<long, List<MySprite>>            PANEL_OVERFLOW = new Dictionary<long, List<MySprite>>();
+
     Dictionary<string, List<MyInventoryItem>>   ITEMS = new Dictionary<string, List<MyInventoryItem>>();
     List<IMyBatteryBlock>                       BATTS = new List<IMyBatteryBlock>();
     Dictionary<string, List<IMyRefinery>>       REFIN = new Dictionary<string, List<IMyRefinery>>();
@@ -75,7 +80,7 @@ public sealed class Program : MyGridProgram {
                 var surface = (IMyTextSurface)block;
                 surface.ContentType = ContentType.SCRIPT;
                 surface.Script = "";
-                PANEL_OVERFLOW[ block.EntityId ] = new List<MySprite>(){}; // Make new entry in sprites list
+                PANEL_OVERFLOW[ block.EntityId ] = new List<MySprite>();
                 if ( !PANEL.ContainsKey(data) ) PANEL.Add( data, new List<IMyTextSurface>() );
                 PANEL[data].Add( surface );
                 
@@ -140,92 +145,149 @@ public sealed class Program : MyGridProgram {
         return r;
     }
 
-    public MySprite CreateSprite( string write, IMyTextSurface panel, Vector2 position, ref Vector2 last_sprite_size ){
+    public MySprite CreateTextSprite( string write, IMyTextSurface panel, Vector2 position, ref Vector2 SPRITE_SIZE, float scale=1 ){
+        SPRITE_SIZE = StringSize( write, panel, scale );
         var sprite = new MySprite() {
             Type = SpriteType.TEXT,
             Data = write,
             Position = position,
-            RotationOrScale = 1f,
+            RotationOrScale = scale,
             Color = panel.FontColor,
             Alignment = TextAlignment.CENTER,
-            FontId = panel.Font
-        };
-        last_sprite_size = StringSize(write, panel);
+            FontId = panel.Font            
+        };        
         return sprite;
     }
-    public MySprite MoveSprite( MySprite sprite, Vector2 position ){
-        //Vector2 new_pos = (sprite.Position ?? new Vector2(0,0)) + position;
-        var sprite_return = new MySprite() {
-            Type = SpriteType.TEXT,
-            Data = "sprite.Data",
-            Position = position,
-            RotationOrScale = 1f,
-            Color = sprite.Color,
+
+    public MySprite CreateIconSprite( string icon, Rectangle rectangle, Color color ){
+        //SPRITE_SIZE= new Vector2( rectangle.Width, rectangle.Height );
+        var sprite = new MySprite() {
+            Type = SpriteType.TEXTURE,
+            Data = icon,
+            Position = new Vector2( rectangle.X, rectangle.Y ),
+            Color = color,
             Alignment = TextAlignment.CENTER,
-            FontId = sprite.FontId
-        };
-        return sprite_return;
+            Size = new Vector2( rectangle.Width, rectangle.Height ) 
+        };        
+        return sprite;
     }
 
+    public List<MySprite> CreateInvertText( string write, IMyTextSurface panel, Vector2 position, float scale, ref Vector2 SPRITE_SIZE ){
+        var start = new Vector2(SPRITE_SIZE.X, SPRITE_SIZE.Y);
+        //write = CreateSpacedString( new List<string>{ write, "-", "-"}, panel );
+
+        // text sprite
+        var sprite = CreateTextSprite( write, panel, position, ref SPRITE_SIZE, 1.5f );
+        sprite.Color = panel.BackgroundColor;
+        sprite.Position = position;
+        // background sprite
+        var background = CreateIconSprite("LCD_Economy_Detail", 
+            new Rectangle( (int)position.X, (int)Math.Floor(position.Y+(SPRITE_SIZE.Y/2)), (int)Math.Floor(SPRITE_SIZE.X), (int)Math.Floor(SPRITE_SIZE.Y) ), panel.FontColor );
+        background.Color = panel.FontColor.Alpha(0.25f);
+
+        return new List<MySprite>(){background, sprite};
+    }
+
+
+    public MySprite CloneSpriteAt( MySprite sprite, Vector2 position, IMyTextSurface panel, ref Vector2 SPRITE_SIZE ){
+        if (sprite.Type == SpriteType.TEXT) SPRITE_SIZE = StringSize( sprite.Data, panel );
+        var return_sprite = new MySprite(){
+            Type = sprite.Type,
+            Data = sprite.Data,
+            Position = position,
+            RotationOrScale = sprite.RotationOrScale,
+            Color = sprite.Color,
+            Alignment = sprite.Alignment,
+            FontId = sprite.FontId,
+            Size = sprite.Size
+        };
+        return return_sprite;
+    }
+
+
+
     public void UpdatePanel( IMyTextSurface panel, string category ){
-        var viewport = new RectangleF( (panel.TextureSize - panel.SurfaceSize)/2, panel.SurfaceSize );
-        Vector2 position = new Vector2( viewport.Width/2, 10 ); // Starting pos
-        List<MySprite> sprites = new List<MySprite>();
-        Vector2 last_sprite_size = new Vector2(0,0);
-        string write = "";
         long id = ((IMyEntity)panel).EntityId;
-        //bool was_overflowing = false;
+        string write = "";
+        var viewport = new RectangleF( (panel.TextureSize - panel.SurfaceSize)/2, panel.SurfaceSize );
+        List<MySprite> sprites = new List<MySprite>();
+        Vector2 position = new Vector2( viewport.Width/2, 10 ); // Starting pos
+        Vector2 SPRITE_SIZE = new Vector2( position.X, position.Y ); // Used to pass the size back from creating sprites
+        bool was_overflowing = false;
         
         Func<MyFixedPoint, string>  FormatAmount = n => n > 1000 ? $"{(int)n/1000}k" : n.ToString();        
         
         // If we have items in queue, use those
-        if ( PANEL_OVERFLOW[id].Count > 0 ){
-            PANEL_OVERFLOW[id].RemoveAt(0);
-            
-            foreach( MySprite old_sprite in PANEL_OVERFLOW[id] ) {                
-                sprites.Add( CreateSprite( old_sprite.Data, panel, position, ref last_sprite_size ));
-                position.Y += last_sprite_size.Y + 5;
-            }            
+        if ( PANEL_OVERFLOW[id].Count > 0 ){            
+            was_overflowing = true;
+            PANEL_OVERFLOW[id].RemoveAt(0);            
 
+            // We are offsetting everything by the size (position) of the first
+            var offset = new Vector2(0, 0);
+            if ( PANEL_OVERFLOW[id].Count>1 ) offset.Y = PANEL_OVERFLOW[id][0].Position.Value.Y;
+            
+            // All sprites in queue until position is outside of panel
+            foreach( MySprite old_sprite in PANEL_OVERFLOW[id] ) {
+                sprites.Add( CloneSpriteAt( old_sprite, (Vector2)(old_sprite.Position - offset), panel, ref SPRITE_SIZE ) );
+                position.Y += SPRITE_SIZE.Y + 5;
+                // Do not draw upon the unseen
+                if ( position.Y > (viewport.Y + viewport.Height) ) { break; };
+            }
+            // If there is too much space at the end, stop and refresh
+            var empty_space = viewport.Height - position.Y;
+            if ( empty_space >= SPRITE_SIZE.Y ) PANEL_OVERFLOW[id] = new List<MySprite>();
+
+        // Gets all the items everywhere
         }else if ( category == "items" ){
             foreach( KeyValuePair<string, List<MyInventoryItem>> entry in ITEMS ){
-                sprites.Add( CreateSprite( 
-                    CreateSpacedString(new List<string>(){ $"{entry.Key}:", " ", ""}, panel), panel, position, ref last_sprite_size )); // Titles
-                position.Y += last_sprite_size.Y + 5;
-                
+                sprites.Add( CreateTextSprite( 
+                    CreateSpacedString(new List<string>(){ $"{entry.Key}:", " ", ""}, panel), panel, position, ref SPRITE_SIZE )); // Titles
+                position.Y += SPRITE_SIZE.Y + 5;                
                 foreach( MyInventoryItem item in entry.Value ){ // Name --- Amount
                     write = CreateSpacedString( new List<string>() { 
                         $"{item.Type.SubtypeId} ", SEPARATOR, $" {FormatAmount(item.Amount)}" }, panel);
                     
-                    sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ));
-                    position.Y += last_sprite_size.Y + 5;
+                    sprites.Add( CreateTextSprite( write, panel, position, ref SPRITE_SIZE ));
+                    position.Y += SPRITE_SIZE.Y + 5;
                 }
             }
 
+        // Gets items with category set as custom data string
         }else if ( ITEMS.ContainsKey( UpperCase(category) ) ){
-            sprites.Add( CreateSprite( $"{UpperCase(category)}:", panel, position, ref last_sprite_size )); // Titles
-            position.Y += last_sprite_size.Y + 5; 
+            //sprites.Add( CreateTextSprite( $"{UpperCase(category)}:", panel, position, ref SPRITE_SIZE )); // Titles
+            sprites.AddRange( CreateInvertText($"{UpperCase(category)}:", panel, position, 1.5f, ref SPRITE_SIZE ) );
+
+            position.Y += SPRITE_SIZE.Y + 5; 
             // Lookup Item category
             foreach( MyInventoryItem item in ITEMS[UpperCase(category)] ){
                 write = CreateSpacedString( new List<string>() { 
                         $"{item.Type.SubtypeId} ", SEPARATOR, $" {FormatAmount(item.Amount)}" }, panel);
-                sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ));
-                position.Y += last_sprite_size.Y + 5;
+                sprites.Add( CreateTextSprite( write, panel, position, ref SPRITE_SIZE ));
+                position.Y += SPRITE_SIZE.Y + 5;
             }
 
+        // Battery Info
         }else if (category == "battery"){
             foreach( IMyBatteryBlock battery in BATTS ){
-                sprites.Add( CreateSprite( $"{battery.CustomName} ( {battery.ChargeMode} ):", panel, position, ref last_sprite_size ) );
-                position.Y += last_sprite_size.Y + 5;
+                //sprites.Add( CreateTextSprite( $"{battery.CustomName} ( {battery.ChargeMode} ):", panel, position, ref SPRITE_SIZE ) );
+                sprites.AddRange(
+                    
+                    CreateInvertText( $" {battery.CustomName}",  
+                        //CreateSpacedString( new List<string>(){ $" {battery.CustomName}", "-", " " }, panel ), */
+
+                    panel, position, 1f, ref SPRITE_SIZE )
+                );
+                position.Y += SPRITE_SIZE.Y + 5;
+
                 
-                // Input %
+                // Input %                
                 var input_current = Math.Round(battery.CurrentInput,2);
                 var input_max = Math.Round(battery.MaxInput,2);                
                 var input_percent = (input_current / input_max) * input_max;
                 write = CreateSpacedString( new List<string>() { 
                         $"Input {Math.Floor(input_percent*100)}% [", CreatePercentBar( input_percent ), $"] {input_current}/{input_max}" }, panel);
-                sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ) );
-                position.Y += last_sprite_size.Y + 5;
+                sprites.Add( CreateTextSprite( write, panel, position, ref SPRITE_SIZE ) );
+                position.Y += SPRITE_SIZE.Y + 5;                
                 
                 // Stored %
                 var batt_current = Math.Round(battery.CurrentStoredPower,1);
@@ -233,38 +295,33 @@ public sealed class Program : MyGridProgram {
                 var batt_percent = Math.Round(batt_current / batt_max, 2);
                 write = CreateSpacedString( new List<string>() { 
                         $"Battery {batt_percent*100}% [", CreatePercentBar( batt_percent ), $"] {batt_current}/{batt_max}" }, panel);
-                sprites.Add( CreateSprite( write, panel, position, ref last_sprite_size ) );
-                position.Y += last_sprite_size.Y + 5;
+                sprites.Add( CreateTextSprite( write, panel, position, ref SPRITE_SIZE ) );
+                position.Y += SPRITE_SIZE.Y + 5;
                 ECHO += $"{batt_current} : {batt_max} : {batt_percent}\n";                              
-            }
-        
+            }        
         }
 
         // Write to panel
         var frame = panel.DrawFrame();
-        Vector2 sprites_height = new Vector2( 0, 0 );
         for ( int i=0; i<sprites.Count; i++ ){
-            var sprite = sprites[i];
-            
-            // If height is too much, add to queue for next tick
-            if( sprite.Size != null ) sprites_height += (Vector2)sprite.Size;            
-            if ( sprite.Position?.Y > viewport.Y + viewport.Height ){
+            var sprite = sprites[i];            
+            // If height is too much and we didn't already know, add to queue
+            if ( !was_overflowing & sprite.Position?.Y > viewport.Y + viewport.Height ){
                 PANEL_OVERFLOW[id] = sprites;
                 break;
             }
-
             frame.Add( sprite );
         }
         frame.Dispose();
-
-        // Reset when not overflowing if we were
-        /* if ( !was_overflowing & PANEL_OVERFLOW[id].Count > 0 ){
-            PANEL_OVERFLOW[id] = new List<MySprite>();
-        } */
+    }
+    
+    public Vector2 StringSize(string strn, IMyTextSurface panl, float scale=1){
+        return panl.MeasureStringInPixels(new StringBuilder(strn), panl.Font, panl.FontSize * scale );
     }
 
-    Func<string, IMyTextSurface, Vector2> StringSize =
-            ( strn, panl )=> panl.MeasureStringInPixels(new StringBuilder(strn), panl.Font, panl.FontSize );
+    public string CreateTitleString( string title, IMyTextSurface panel ){
+        return CreateSpacedString( new List<string>(){ $" {title}", " ", "" }, panel); 
+    }
 
     public string CreateSpacedString( List<string> str, IMyTextSurface panel ){
         var final_string = string.Join( "", str );
@@ -300,7 +357,6 @@ public sealed class Program : MyGridProgram {
                 final_string = $"{str[0]}{sep_final}{str[str.Count-1]}";
             }            
         }        
-        //panel.WriteText( $"{final_string}\n", true );
         return final_string;
     }
 
