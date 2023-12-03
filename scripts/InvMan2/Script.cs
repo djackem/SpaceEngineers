@@ -55,7 +55,7 @@ public sealed class Program : MyGridProgram {
     
     //Dictionary<string, Vector2>           PANEL_INFO = new Dictionary<IMyTextPanel, Vector2>();
         
-    string ECHO = "";    
+    string ECHO = "";
     
     public void Save() { }
 
@@ -91,13 +91,17 @@ public sealed class Program : MyGridProgram {
                 if ( !REFIN.ContainsKey(data) ) REFIN.Add( data, new List<IMyRefinery>() );
                 REFIN[data].Add( (IMyRefinery)block );
             }
-        }
+        }        
     }
 
     //------------------------- Helpers -------------------------
     Func<string, string>        FormatCustomData = s => s.ToLower().Trim();
     Func<string, string>        FormatId = s => s.Substring( s.LastIndexOf("_") + 1 ).Trim();
     Func<string, string>        UpperCase = s => char.ToUpper(s[0]) + s.Substring(1);
+
+    public Vector2 StringSize(string strn, IMyTextSurface panl, float scale=1){
+        return panl.MeasureStringInPixels(new StringBuilder(strn), panl.Font, panl.FontSize * scale );
+    }
     
     public void RegisterItem( MyInventoryItem item ){
         string id = FormatId( item.Type.TypeId );
@@ -133,9 +137,9 @@ public sealed class Program : MyGridProgram {
         return updated_inventory;
     }
 
-    public void UpdateRefinery( IMyRefinery refinery, string category ){
+    /* public void UpdateRefinery( IMyRefinery refinery, string category ){
        // ECHO += refinery.CustomName;
-    }
+    } */
 
     public string CreatePercentBar( double percent ){
         string r = "";        
@@ -157,6 +161,38 @@ public sealed class Program : MyGridProgram {
             FontId = panel.Font            
         };        
         return sprite;
+    }
+    
+    private class SuperSprite{
+        public MySprite sprite;
+        public Rectangle rect;
+               
+        private IMyTextSurface _panel;
+
+        public SuperSprite( 
+                string          data, 
+                IMyTextPanel    panel,
+                Vector2?        position = null, 
+                float           rotation_scale=1f,
+                string          font = null,
+                SpriteType      type = SpriteType.TEXT, 
+                Vector2?        size = null,
+                Color?          color = null, 
+                TextAlignment alignment = TextAlignment.CENTER
+            ){
+
+            _panel = panel;
+            rotation_scale = type==SpriteType.TEXT ? rotation_scale : ( rotation_scale==1f ? 0f : rotation_scale );// If icon, change default rotation to 0
+            font = font==null ? panel.Font : font;
+
+            sprite = new MySprite(){ Type=type, Data=data, Position=position, Color=color, Alignment=alignment, Size=size, RotationOrScale=rotation_scale, FontId=font };
+
+            if ( type == SpriteType.TEXT & size == null ){
+                var string_size = panel.MeasureStringInPixels(new StringBuilder(data), panel.Font, panel.FontSize * rotation_scale );
+                //rect = 
+            }
+            
+        }
     }
 
     public MySprite CreateIconSprite( string icon, Rectangle rectangle, Color color ){
@@ -315,13 +351,11 @@ public sealed class Program : MyGridProgram {
         frame.Dispose();
     }
     
-    public Vector2 StringSize(string strn, IMyTextSurface panl, float scale=1){
-        return panl.MeasureStringInPixels(new StringBuilder(strn), panl.Font, panl.FontSize * scale );
-    }
+    
 
-    public string CreateTitleString( string title, IMyTextSurface panel ){
+    /* public string CreateTitleString( string title, IMyTextSurface panel ){
         return CreateSpacedString( new List<string>(){ $" {title}", " ", "" }, panel); 
-    }
+    } */
 
     public string CreateSpacedString( List<string> str, IMyTextSurface panel ){
         var final_string = string.Join( "", str );
@@ -364,7 +398,7 @@ public sealed class Program : MyGridProgram {
     public void Main(string argument, UpdateType updateSource) {
         ECHO = "";
         ITEMS = new Dictionary<string, List<MyInventoryItem>>();
-
+    
         foreach( KeyValuePair<string, List<IMyCargoContainer>> entry in CARGO ){
             foreach( IMyCargoContainer container in entry.Value ){
                 if ( UpdateCargo(container, entry.Key) ) {
